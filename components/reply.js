@@ -78,7 +78,8 @@ export default forwardRef(function Reply ({
               })
               return [newCommentRef, ...existingCommentRefs]
             }
-          }
+          },
+          optimistic: true
         })
 
         // no lag for itemRepetition
@@ -102,7 +103,8 @@ export default forwardRef(function Reply ({
               ncomments (existingNComments = 0) {
                 return existingNComments + 1
               }
-            }
+            },
+            optimistic: true
           })
         })
 
@@ -113,7 +115,7 @@ export default forwardRef(function Reply ({
       }
     },
     onSuccessfulSubmit: (data, { resetForm }) => {
-      resetForm({ text: '' })
+      resetForm({ values: { text: '' } })
       setReply(replyOpen || false)
     },
     navigateOnSubmit: false

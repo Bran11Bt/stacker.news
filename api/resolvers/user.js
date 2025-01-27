@@ -66,11 +66,12 @@ export async function topUsers (parent, { cursor, when, by, from, to, limit = LI
     case 'comments': column = 'ncomments'; break
     case 'referrals': column = 'referrals'; break
     case 'stacking': column = 'stacked'; break
+    case 'value':
     default: column = 'proportion'; break
   }
 
   const users = (await models.$queryRawUnsafe(`
-    SELECT *
+    SELECT * ${column === 'proportion' ? ', proportion' : ''}
     FROM
       (SELECT users.*,
         COALESCE(floor(sum(msats_spent)/1000), 0) as spent,
@@ -444,25 +445,13 @@ export default {
           where: {
             userId: me.id,
             status: 'CONFIRMED',
+            hash: {
+              not: null
+            },
             updatedAt: {
               gt: lastChecked
             },
-            OR: [
-              {
-                invoiceForward: {
-                  none: {}
-                }
-              },
-              {
-                invoiceForward: {
-                  some: {
-                    invoice: {
-                      actionType: 'ZAP'
-                    }
-                  }
-                }
-              }
-            ]
+            invoiceForward: { is: null }
           }
         })
         if (wdrwl) {
@@ -926,7 +915,8 @@ export default {
       // get the user's first item
       const item = await models.item.findFirst({
         where: {
-          userId: user.id
+          userId: user.id,
+          OR: [{ invoiceActionState: 'PAID' }, { invoiceActionState: null }]
         },
         orderBy: {
           createdAt: 'asc'
@@ -1014,7 +1004,13 @@ export default {
       if (!me || me.id !== user.id) {
         return 0
       }
-      return msatsToSats(user.msats)
+      return msatsToSats(user.msats + user.mcredits)
+    },
+    credits: async (user, args, { models, me }) => {
+      if (!me || me.id !== user.id) {
+        return 0
+      }
+      return msatsToSats(user.mcredits)
     },
     authMethods,
     hasInvites: async (user, args, { models }) => {
@@ -1096,7 +1092,7 @@ export default {
 
       if (!when || when === 'forever') {
         // forever
-        return (user.stackedMsats && msatsToSats(user.stackedMsats)) || 0
+        return ((user.stackedMsats && msatsToSats(user.stackedMsats)) || 0)
       }
 
       const range = whenRange(when, from, to)

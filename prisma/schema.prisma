@@ -39,6 +39,7 @@ model User {
   trust                     Float                @default(0)
   lastSeenAt                DateTime?
   stackedMsats              BigInt               @default(0)
+  stackedMcredits           BigInt               @default(0)
   noteAllDescendants        Boolean              @default(true)
   noteDeposits              Boolean              @default(true)
   noteWithdrawals           Boolean              @default(true)
@@ -119,6 +120,9 @@ model User {
   autoWithdrawMaxFeePercent Float?
   autoWithdrawThreshold     Int?
   autoWithdrawMaxFeeTotal   Int?
+  mcredits                  BigInt               @default(0)
+  receiveCreditsBelowSats   Int                  @default(10)
+  sendCreditsBelowSats      Int                  @default(10)
   muters                    Mute[]               @relation("muter")
   muteds                    Mute[]               @relation("muted")
   ArcOut                    Arc[]                @relation("fromUser")
@@ -140,7 +144,10 @@ model User {
   vaultKeyHash              String               @default("")
   walletsUpdatedAt          DateTime?
   vaultEntries              VaultEntry[]         @relation("VaultEntries")
-  proxyReceive              Boolean              @default(false)
+  proxyReceive              Boolean              @default(true)
+  directReceive             Boolean              @default(true)
+  DirectPaymentReceived     DirectPayment[]      @relation("DirectPaymentReceived")
+  DirectPaymentSent         DirectPayment[]      @relation("DirectPaymentSent")
 
   @@index([photoId])
   @@index([createdAt], map: "users.created_at_index")
@@ -217,6 +224,7 @@ model Wallet {
   vaultEntries   VaultEntry[]     @relation("VaultEntries")
   withdrawals    Withdrawl[]
   InvoiceForward InvoiceForward[]
+  DirectPayment  DirectPayment[]
 
   @@index([userId])
   @@index([priority])
@@ -463,15 +471,18 @@ model LnWith {
 }
 
 model Invite {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
-  userId    Int
-  gift      Int?
-  limit     Int?
-  revoked   Boolean  @default(false)
-  user      User     @relation("Invites", fields: [userId], references: [id], onDelete: Cascade)
-  invitees  User[]
+  id          String   @id @default(dbgenerated("encode(gen_random_bytes(16), 'hex'::text)"))
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  userId      Int
+  gift        Int?
+  limit       Int?
+  giftedCount Int      @default(0)
+  revoked     Boolean  @default(false)
+  user        User     @relation("Invites", fields: [userId], references: [id], onDelete: Cascade)
+  invitees    User[]
+
+  description String?
 
   @@index([createdAt], map: "Invite.created_at_index")
   @@index([userId], map: "Invite.userId_index")
@@ -513,10 +524,12 @@ model Item {
   pollCost            Int?
   paidImgLink         Boolean               @default(false)
   commentMsats        BigInt                @default(0)
+  commentMcredits     BigInt                @default(0)
   lastCommentAt       DateTime?
   lastZapAt           DateTime?
   ncomments           Int                   @default(0)
   msats               BigInt                @default(0)
+  mcredits            BigInt                @default(0)
   cost                Int                   @default(0)
   weightedDownVotes   Float                 @default(0)
   bio                 Boolean               @default(false)
@@ -585,6 +598,7 @@ model Item {
   @@index([cost])
   @@index([url])
   @@index([boost])
+  @@index([invoicePaidAt])
 }
 
 // we use this to denormalize a user's aggregated interactions (zaps) with an item
@@ -897,39 +911,42 @@ model ItemMention {
 }
 
 model Invoice {
-  id             Int             @id @default(autoincrement())
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @default(now()) @updatedAt @map("updated_at")
-  userId         Int
-  hash           String          @unique(map: "Invoice.hash_unique")
-  preimage       String?         @unique(map: "Invoice.preimage_unique")
-  isHeld         Boolean?
-  bolt11         String
-  expiresAt      DateTime
-  confirmedAt    DateTime?
-  confirmedIndex BigInt?
-  cancelled      Boolean         @default(false)
-  cancelledAt    DateTime?
-  msatsRequested BigInt
-  msatsReceived  BigInt?
-  desc           String?
-  comment        String?
-  lud18Data      Json?
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  invoiceForward InvoiceForward?
-
-  actionState      InvoiceActionState?
-  actionType       InvoiceActionType?
-  actionOptimistic Boolean?
-  actionId         Int?
-  actionArgs       Json?               @db.JsonB
-  actionError      String?
-  actionResult     Json?               @db.JsonB
-  ItemAct          ItemAct[]
-  Item             Item[]
-  Upload           Upload[]
-  PollVote         PollVote[]
-  PollBlindVote    PollBlindVote[]
+  id                 Int                 @id @default(autoincrement())
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @default(now()) @updatedAt @map("updated_at")
+  userId             Int
+  hash               String              @unique(map: "Invoice.hash_unique")
+  preimage           String?             @unique(map: "Invoice.preimage_unique")
+  isHeld             Boolean?
+  bolt11             String
+  expiresAt          DateTime
+  confirmedAt        DateTime?
+  confirmedIndex     BigInt?
+  cancelled          Boolean             @default(false)
+  cancelledAt        DateTime?
+  userCancel         Boolean?
+  msatsRequested     BigInt
+  msatsReceived      BigInt?
+  desc               String?
+  comment            String?
+  lud18Data          Json?
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoiceForward     InvoiceForward?
+  predecessorId      Int?                @unique(map: "Invoice.predecessorId_unique")
+  predecessorInvoice Invoice?            @relation("PredecessorInvoice", fields: [predecessorId], references: [id], onDelete: Cascade)
+  successorInvoice   Invoice?            @relation("PredecessorInvoice")
+  actionState        InvoiceActionState?
+  actionType         InvoiceActionType?
+  actionOptimistic   Boolean?
+  actionId           Int?
+  actionArgs         Json?               @db.JsonB
+  actionError        String?
+  actionResult       Json?               @db.JsonB
+  ItemAct            ItemAct[]
+  Item               Item[]
+  Upload             Upload[]
+  PollVote           PollVote[]
+  PollBlindVote      PollBlindVote[]
 
   @@index([createdAt], map: "Invoice.created_at_index")
   @@index([userId], map: "Invoice.userId_index")
@@ -938,6 +955,29 @@ model Invoice {
   @@index([confirmedAt])
   @@index([actionType])
   @@index([actionState])
+}
+
+model DirectPayment {
+  id         Int      @id @default(autoincrement())
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+  senderId   Int?
+  receiverId Int?
+  preimage   String?  @unique
+  bolt11     String?
+  hash       String?  @unique
+  desc       String?
+  comment    String?
+  lud18Data  Json?
+  msats      BigInt
+  walletId   Int?
+  sender     User?    @relation("DirectPaymentSent", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User?    @relation("DirectPaymentReceived", fields: [receiverId], references: [id], onDelete: Cascade)
+  wallet     Wallet?  @relation(fields: [walletId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([senderId])
+  @@index([receiverId])
 }
 
 model InvoiceForward {
@@ -954,7 +994,7 @@ model InvoiceForward {
 
   // we get these values when the outgoing invoice is settled
   invoiceId   Int  @unique
-  withdrawlId Int?
+  withdrawlId Int? @unique
 
   invoice   Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   wallet    Wallet     @relation(fields: [walletId], references: [id], onDelete: Cascade)
@@ -982,7 +1022,7 @@ model Withdrawl {
   walletId       Int?
   user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet         Wallet?          @relation(fields: [walletId], references: [id], onDelete: SetNull)
-  invoiceForward InvoiceForward[]
+  invoiceForward InvoiceForward?
 
   @@index([createdAt], map: "Withdrawl.created_at_index")
   @@index([userId], map: "Withdrawl.userId_index")
